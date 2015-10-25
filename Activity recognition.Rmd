@@ -1,0 +1,153 @@
+---
+title: "Activity Recognition"
+author: "Gunnar Gunnarsson"
+date: "October 25, 2015"
+output: 
+  html_document:
+    fig_height: 3
+    fig_width: 5
+  pdf_document:
+    fig_height: 3
+    fig_width: 5
+  word_document:
+    fig_height: 3
+    fig_width: 5
+---
+
+
+```{r include=FALSE}
+# Don't delete this chunk if you are using the mosaic package
+# This loads the mosaic and dplyr packages
+require(mosaic)
+```
+
+```{r include=FALSE}
+# Some customization.  You can alter or delete as desired (if you know what you are doing).
+
+# This changes the default colors in lattice plots.
+trellis.par.set(theme=theme.mosaic())  
+
+# knitr settings to control how R chunks work.
+require(knitr)
+opts_chunk$set(
+  tidy=FALSE,     # display code as typed
+  size="small"    # slightly smaller font for code
+)
+```
+
+## Introduction
+
+In this project we analyse data from measurement devices that tracked
+the movements of several people while they performed a prescribed
+set of exercises.
+
+Our task is to categorize which exercise is which from the supplied
+data.
+
+We will use the *caret* package for our analysis.
+```{r,warning=FALSE}
+library(caret)
+library(randomForest)
+```
+
+
+### Data Cleaning and Preparation
+
+We begin by loading the data. We load from a local location to avoid
+repetitious downloading.
+
+```{r}
+training=read.csv("../project data/pml-training.csv")
+testing=read.csv("../project data/pml-testing.csv")
+```
+
+We then split the training data into a new, smaller training set and 
+a cross-validation set to be able to estimate the out-of-sample error
+rate.
+
+```{r}
+set.seed(153)
+inTrain=createDataPartition(y=training$classe,p=0.75,list=FALSE)
+cross_val=training[-inTrain,]
+my_train=training[inTrain,]
+```
+
+We further clean the data by removing columns that contain corrupted
+data and columns that contain very little information. Finally we 
+remove non-numerical columns as such data is not likely to be present
+when the final model will be applied in practice.
+
+```{r}
+# First remove columns that contain more than 50% NAs
+NAcount=apply(my_train,2,function(x) sum(is.na(x)))
+keep_column=(NAcount<nrow(my_train)/2)
+my_train=my_train[,keep_column]
+cross_val=cross_val[,keep_column]
+my_test=testing[,keep_column]
+# Then columns that have near zero variance
+var_check=nearZeroVar(my_train,saveMetrics=T)
+keep_column_2=(!var_check$nzv)
+my_train=my_train[,keep_column_2]
+cross_val=cross_val[,keep_column_2]
+my_test=my_test[,keep_column_2]
+# And finally the first 6 columns which contain non-numerical data
+keep_column_3=!(1:ncol(my_train)%in% c(1:6))
+my_train=my_train[,keep_column_3]
+cross_val=cross_val[,keep_column_3]
+my_test=my_test[,keep_column_3]
+```
+
+As can be seen from the code, we delete the corresponding columns from
+the cross-validation set and the test set also.
+
+We end up with a training set of `r dim(my_train)[1]` training samples
+on `r dim(my_train)[2]-1` variables.
+
+### Model Training
+
+We will train a random forest model to recognize the activities.
+
+In the exploratory phase of this project a full model was trained 
+using all the variables and the default settings of the *train*
+function from the *caret* package and that resulted in an accuracy of
+99.57% but took hours to train.
+
+Thus for this final write-up we use a smaller number of variables and
+set the number of trees to be used by the algorithm to 20 instead
+of the default value of 500. This results in a slight drop of accuracy
+but speeds the training up to the point that it takes only a couple
+of minutes.
+
+For simplicity we simply choose which covariates to use randomly
+```{r, cache=T}
+set.seed(5223)
+nbvars=25
+# Create the formula for the train function
+formula_rhs=paste(
+    names(my_train)[sample(length(names(my_train))-1,nbvars)],
+    collapse="+")
+formula_lhs="classe"
+formula=paste(formula_lhs,formula_rhs,sep="~")
+formula
+start_time=proc.time()
+rfModelSmall=train(as.formula(formula),
+                   data=my_train,method="rf",ntree=20)
+rfModelSmall
+end_time=proc.time()-start_time
+end_time
+rfPredict=predict(rfModelSmall,newdata=cross_val)
+cfm=confusionMatrix(cross_val$classe,rfPredict)
+cfm
+```
+### Results
+
+We trained a random forest model with only about half of the covariates
+and with only 20 trees instead of the default of 500. Yet we obtained
+a model with an estimated out-of-sample accuracy rate of 
+`r sprintf("%.1f%%",cfm$overall["Accuracy"]*100)` or an error rate of mere `r sprintf("%.1f%%",(1-cfm$overall["Accuracy"])*100)`.
+
+Our forecasted values on the test set are
+```{r}
+testPredict=predict(rfModelSmall,newdata=my_test)
+testPredict
+```
